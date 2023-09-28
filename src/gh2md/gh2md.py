@@ -382,7 +382,9 @@ class GithubAPI:
                 err = False
                 self._total_pages_fetched += 1
                 break
-            except Exception:  # Could catch cases that aren't retryable, but I don't think it's too annoying
+            except (
+                Exception
+            ):  # Could catch cases that aren't retryable, but I don't think it's too annoying
                 err = True
                 logger.warning(
                     f"Exception response from request attempt {attempt}", exc_info=True
