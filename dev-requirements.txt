@@ -1,8 +1,0 @@
-coverage
-pytest>=3.0
-mock
-tox
-flake8
-twine
-requests
-black

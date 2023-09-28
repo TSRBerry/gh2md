@@ -1,34 +1,34 @@
-.PHONY: test build install clean examples lint upload assert_new_pypi_version assert_clean_git
+.PHONY: test build install clean examples lint release assert_new_pypi_version assert_clean_git
 
 clean:
-	rm -rf build dist
+	rm -rf dist
 
 build:
-	python setup.py sdist bdist_wheel
+	poetry build
 
 install:
-	python setup.py install
+	poetry install
 
 test:
-	tox
+	poetry run tox
 
 format:
-	black src tests
+	poetry run black src tests
 
 lint:
-	black src tests --check
-	flake8 src
+	poetry run black src tests --check
+	poetry run flake8 src
 
 examples:
 	rm -rf examples
 	mkdir examples
-	gh2md mattduck/gh2md examples/gh2md.md
-	gh2md mattduck/gh2md examples/gh2md-multiple-files-example --multiple-files
-	gh2md Russell91/sshrc examples/sshrc.md
+	poetry run gh2md mattduck/gh2md examples/gh2md.md
+	poetry run gh2md mattduck/gh2md examples/gh2md-multiple-files-example --multiple-files
+	poetry run gh2md Russell91/sshrc examples/sshrc.md
 
 release: clean build assert_clean_git assert_new_pypi_version
-	twine upload dist/"$$(python setup.py --name)"*
-	git tag "v$$(python setup.py --version)"
+	poetry publish
+	git tag "v$$(poetry version -s)"
 	echo "Release successful. You probably want to push the new git tag."
 
 assert_new_pypi_version:
