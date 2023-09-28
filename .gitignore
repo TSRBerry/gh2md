@@ -18,3 +18,4 @@ var/
 *.egg
 scratch/
 .tox/
+__pycache__/
