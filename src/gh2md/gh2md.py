@@ -11,7 +11,7 @@ from typing import Tuple
 from gh2md.github.api import GithubAPI
 from gh2md.github.issue import GithubIssue
 from gh2md.github.repo import GithubRepo
-from gh2md.logger import init_logger, logger
+from gh2md.logger import init_logger
 from . import templates_markdown, __version__
 
 ENV_GITHUB_TOKEN = "GITHUB_ACCESS_TOKEN"
@@ -39,7 +39,7 @@ using the --no... flags, eg. --no-closed-prs, or --no-prs.
     token=ENV_GITHUB_TOKEN
 )
 
-init_logger(__name__)
+logger = init_logger(__name__)
 
 
 def parse_args(args):

@@ -10,7 +10,9 @@ from dateutil.parser import parse as dateutil_parse
 from gh2md.github.comment import GithubComment
 from gh2md.github.issue import GithubIssue
 from gh2md.github.repo import GithubRepo
-from gh2md.logger import logger
+from gh2md.logger import get_logger
+
+logger = None
 
 
 @dataclass
@@ -197,6 +199,8 @@ class GithubAPI:
     """
 
     def __post_init__(self):
+        global logger
+        logger = get_logger()
         self._session = None  # Requests session
         self._total_pages_fetched = 0
         if not self.token:
