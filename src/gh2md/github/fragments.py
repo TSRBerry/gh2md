@@ -159,9 +159,9 @@ class Fragments:
         deployment_fields.on(self._ds.Deployment)
         deployment_fields.select(
             self.node,
-            # self._ds.Deployment.commit.select(self.commit),
             self._ds.Deployment.environment,
             self._ds.Deployment.description,
+            optionalCommit=self._ds.Deployment.commit.select(self.commit),
         )
 
         return deployment_fields
@@ -643,9 +643,9 @@ class Fragments:
         merged_event_fields.on(self._ds.MergedEvent)
         merged_event_fields.select(
             self._ds.MergedEvent.actor.select(self.actor),
-            # self._ds.MergedEvent.commit.select(self.commit),
             self._ds.MergedEvent.createdAt,
             self._ds.MergedEvent.mergeRefName,
+            optionalCommit=self._ds.MergedEvent.commit.select(self.commit),
         )
 
         return merged_event_fields
@@ -722,8 +722,8 @@ class Fragments:
                 self._ds.CommitCommentConnection.totalCount,
             ),
             self._ds.PullRequestCommitCommentThread.commit.select(self.commit),
-            # self._ds.PullRequestCommitCommentThread.path,
             self._ds.PullRequestCommitCommentThread.position,
+            optionalPath=self._ds.PullRequestCommitCommentThread.path,
         )
 
         return pull_request_commit_comment_thread_fields
@@ -741,7 +741,7 @@ class Fragments:
                 self._ds.PullRequestReviewComment.isMinimized,
                 self._ds.PullRequestReviewComment.minimizedReason,
                 self._ds.PullRequestReviewComment.outdated,
-                # self._ds.PullRequestReviewComment.path,
+                self._ds.PullRequestReviewComment.path,
                 self._ds.PullRequestReviewComment.reactionGroups.select(self.reaction_group),
                 self._ds.PullRequestReviewComment.startLine,
                 self._ds.PullRequestReviewComment.subjectType,
@@ -785,7 +785,7 @@ class Fragments:
             self._ds.PullRequestReviewThread.isOutdated,
             self._ds.PullRequestReviewThread.isResolved,
             self._ds.PullRequestReviewThread.line,
-            # self._ds.PullRequestReviewThread.path,
+            self._ds.PullRequestReviewThread.path,
             self._ds.PullRequestReviewThread.resolvedBy.select(self.actor),
             self._ds.PullRequestReviewThread.startLine,
             self._ds.PullRequestReviewThread.subjectType,
@@ -811,12 +811,12 @@ class Fragments:
         referenced_event_fields.on(self._ds.ReferencedEvent)
         referenced_event_fields.select(
             self._ds.ReferencedEvent.actor.select(self.actor),
-            # self._ds.ReferencedEvent.commit.select(self.commit),
             self._ds.ReferencedEvent.commitRepository.select(
                 self._ds.Repository.nameWithOwner,
                 self._ds.Repository.url,
             ),
             self._ds.ReferencedEvent.isDirectReference,
+            optionalCommit=self._ds.ReferencedEvent.commit.select(self.commit),
         )
 
         return referenced_event_fields
