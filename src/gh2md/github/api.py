@@ -1,14 +1,18 @@
 import os
 import sys
-import time
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Tuple
 
-import requests
 from dateutil.parser import parse as dateutil_parse
+from gql import Client
+from gql.dsl import DSLSchema
+from gql.transport.exceptions import TransportError
+from gql.transport.requests import RequestsHTTPTransport
+from graphql import DocumentNode
 
 from gh2md.github.comment import GithubComment
 from gh2md.github.issue import GithubIssue
+from gh2md.github.queries import Queries
 from gh2md.github.repo import GithubRepo
 from gh2md.logger import get_logger
 
@@ -25,183 +29,13 @@ class GithubAPI:
     per_page: int = 100
 
     _ENDPOINT = "https://api.github.com/graphql"
-    _REPO_QUERY = """
-        query(
-          $owner: String!
-          $repo: String!
-          $issuePerPage: Int!
-          $issueNextPageCursor: String
-          $pullRequestPerPage: Int!
-          $pullRequestNextPageCursor: String
-          $issueStates: [IssueState!]
-          $pullRequestStates: [PullRequestState!]
-        ) {
-          rateLimit {
-            limit
-            cost
-            remaining
-            resetAt
-          }
-          repository(owner: $owner, name: $repo) {
-            nameWithOwner
-            url
-            issues(
-              first: $issuePerPage
-              after: $issueNextPageCursor
-              filterBy: { states: $issueStates }
-              orderBy: { field: CREATED_AT, direction: DESC }
-            ) {
-              totalCount
-              pageInfo {
-                endCursor
-                hasNextPage
-              }
-              nodes {
-                id
-                number
-                url
-                title
-                body
-                state
-                createdAt
-                author {
-                  login
-                  url
-                  avatarUrl
-                }
-                labels(first: $issuePerPage) {
-                  nodes {
-                    name
-                    url
-                  }
-                }
-                comments(first: $issuePerPage) {
-                  totalCount
-                  pageInfo {
-                    endCursor
-                    hasNextPage
-                  }
-                  nodes {
-                    body
-                    createdAt
-                    url
-                    author {
-                      login
-                      url
-                      avatarUrl
-                    }
-                  }
-                }
-              }
-            }
-            pullRequests(
-              first: $pullRequestPerPage
-              after: $pullRequestNextPageCursor
-              states: $pullRequestStates
-              orderBy: { field: CREATED_AT, direction: DESC }
-            ) {
-              totalCount
-              pageInfo {
-                endCursor
-                hasNextPage
-              }
-              nodes {
-                id
-                number
-                url
-                title
-                body
-                state
-                createdAt
-                author {
-                  login
-                  url
-                  avatarUrl
-                }
-                labels(first: $pullRequestPerPage) {
-                  nodes {
-                    name
-                    url
-                  }
-                }
-                comments(first: $pullRequestPerPage) {
-                  totalCount
-                  pageInfo {
-                    endCursor
-                    hasNextPage
-                  }
-                  nodes {
-                    body
-                    createdAt
-                    url
-                    author {
-                      login
-                      url
-                      avatarUrl
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-    """
-
-    _NODE_COMMENT_QUERY = """
-        query($perPage: Int!, $id: ID!, $commentCursor: String!) {
-          rateLimit {
-            limit
-            cost
-            remaining
-            resetAt
-          }
-          node(id: $id) {
-            ... on Issue {
-              comments(first: $perPage, after: $commentCursor) {
-                totalCount
-                pageInfo {
-                  endCursor
-                  hasNextPage
-                }
-                nodes {
-                  body
-                  createdAt
-                  url
-                  author {
-                    login
-                    url
-                    avatarUrl
-                  }
-                }
-              }
-            }
-            ... on PullRequest {
-              comments(first: $perPage, after: $commentCursor) {
-                totalCount
-                pageInfo {
-                  endCursor
-                  hasNextPage
-                }
-                nodes {
-                  body
-                  createdAt
-                  url
-                  author {
-                    login
-                    url
-                    avatarUrl
-                  }
-                }
-              }
-            }
-          }
-        }
-    """
+    _QUERIES: Queries = None
 
     def __post_init__(self):
         global logger
         logger = get_logger()
-        self._session = None  # Requests session
+        self._client = None  # GQL client
+        self._ds = None  # GQL DSL schema
         self._total_pages_fetched = 0
         if not self.token:
             print(
@@ -209,70 +43,65 @@ class GithubAPI:
             )
             sys.exit(1)
 
+        self._QUERIES = Queries(self._request_dsl_schema())
+
         # For testing
         per_page_override = os.environ.get("_GH2MD_PER_PAGE_OVERRIDE", None)
         if per_page_override:
             self.per_page = int(per_page_override)
 
-    def _request_session(self) -> requests.Session:
-        if not self._session:
-            self._session = requests.Session()
-            self._session.headers.update({"Authorization": "token " + self.token})
-        return self._session
+    def _request_session(self) -> Client:
+        if not self._client:
+            transport = RequestsHTTPTransport(
+                self._ENDPOINT,
+                verify=True,
+                retries=3,
+                headers={'Authorization': f'Bearer {self.token}'}
+            )
 
-    def _post(
-        self, json: Dict[str, Any], headers: Optional[Dict[str, Any]] = None
-    ) -> Tuple[Dict[str, Any], bool]:
+            self._client = Client(transport=transport, fetch_schema_from_transport=True)
+        return self._client
+
+    def _request_dsl_schema(self) -> DSLSchema:
+        if not self._ds:
+            with self._request_session():
+                self._ds = DSLSchema(self._request_session().schema)
+        return self._ds
+
+    def _post(self, document: DocumentNode, variables: Optional[dict[str, Any]] = None) -> Tuple[Dict[str, Any], bool]:
         """
         Make a graphql request and handle errors/retries.
         """
-        if headers is None:
-            headers = {}
-        err = False
-        for attempt in range(1, 3):
+        with self._request_session() as session:
             try:
-                resp = self._request_session().post(
-                    self._ENDPOINT, json=json, headers=headers
-                )
-                resp.raise_for_status()
+                result = session.execute(document, variables, get_execution_result=True)
                 err = False
                 self._total_pages_fetched += 1
-                break
-            except (
-                Exception
-            ):  # Could catch cases that aren't retryable, but I don't think it's too annoying
-                err = True
-                logger.warning(
-                    f"Exception response from request attempt {attempt}", exc_info=True
-                )
-                time.sleep(3)
+            except TransportError:
+                logger.exception("Request failed multiple retries, returning empty data")
+                return {}, True
 
-        if err:
-            decoded = {}
-            logger.error("Request failed multiple retries, returning empty data")
-        else:
-            decoded = resp.json()
-            rl = decoded.get("data", {}).get("rateLimit")
+        if not err:
+            rl = result.data.get("rateLimit")
             if rl:
                 logger.info(
                     f"Rate limit info after request: limit={rl['limit']}, cost={rl['cost']}, remaining={rl['remaining']}, resetAt={rl['resetAt']}"
                 )
 
-            errors = decoded.get("errors")
-            if errors:
+            if result.errors:
                 err = True
-                logger.error(f"Found GraphQL errors in response data: {errors}")
+                logger.error(f"Found GraphQL errors in response data: {result.errors}")
 
-        return decoded, err
+        return result.data, err
 
     def _fetch_repo(
-        self,
-        owner: str,
-        repo: str,
-        include_issues: bool,
-        include_closed_issues: bool,
-        include_prs: bool,
-        include_closed_prs: bool,
+            self,
+            owner: str,
+            repo: str,
+            include_issues: bool,
+            include_closed_issues: bool,
+            include_prs: bool,
+            include_closed_prs: bool,
     ) -> Dict[str, Any]:
         """
         Makes the appropriate number of requests to retrieve all the requested
@@ -314,21 +143,22 @@ class GithubAPI:
                 if pr_cursor:
                     variables["pullRequestNextPageCursor"] = pr_cursor
                 data, err = self._post(
-                    json={"query": self._REPO_QUERY, "variables": variables}
+                    self._QUERIES.repository(),
+                    variables
                 )
                 if err:
                     break
                 else:
                     success_responses.append(data)
 
-                    issues = data["data"]["repository"]["issues"]
+                    issues = data["repository"]["issues"]
                     if issues["nodes"]:
                         issue_cursor = issues["pageInfo"]["endCursor"]
                         has_issue_page = issues["pageInfo"]["hasNextPage"]
                     else:
                         issue_cursor, has_issue_page = None, False
 
-                    prs = data["data"]["repository"]["pullRequests"]
+                    prs = data["repository"]["pullRequests"]
                     if prs["nodes"]:
                         pr_cursor = prs["pageInfo"]["endCursor"]
                         has_pr_page = prs["pageInfo"]["hasNextPage"]
@@ -350,75 +180,76 @@ class GithubAPI:
         # memory shouldn't be a concern.
         merged_pages = success_responses[0] if success_responses else {}
         for page in success_responses[1:]:
-            merged_pages["data"]["repository"]["issues"]["nodes"].extend(
-                page["data"]["repository"]["issues"]["nodes"]
+            merged_pages["repository"]["issues"]["nodes"].extend(
+                page["repository"]["issues"]["nodes"]
             )
-            merged_pages["data"]["repository"]["pullRequests"]["nodes"].extend(
-                page["data"]["repository"]["pullRequests"]["nodes"]
+            merged_pages["repository"]["pullRequests"]["nodes"].extend(
+                page["repository"]["pullRequests"]["nodes"]
             )
         if not was_interrupted:
-            self._fetch_and_merge_comments(merged_pages)
+            self._fetch_and_merge_timeline_items(merged_pages)
         return merged_pages
 
-    def _fetch_and_merge_comments(self, merged_pages: Dict[str, Any]) -> None:
+    def _fetch_and_merge_timeline_items(self, merged_pages: Dict[str, Any]) -> None:
         """
-        For any issues/PRs that are found to have an additional page of comments
-        available, fetch the comments and merge them with the original data.
+        For any issues/PRs that are found to have an additional page of timeline items
+        available, fetch the items and merge them with the original data.
         """
-        if not merged_pages.get("data"):
+        if not merged_pages.get("repository"):
             return
 
         all_nodes = (
-            merged_pages["data"]["repository"]["issues"]["nodes"]
-            + merged_pages["data"]["repository"]["pullRequests"]["nodes"]
+                merged_pages["repository"]["issues"]["nodes"]
+                + merged_pages["repository"]["pullRequests"]["nodes"]
         )
 
         for original_node in all_nodes:
-            if not original_node["comments"]["pageInfo"]["hasNextPage"]:
+            if not original_node["timelineItems"]["pageInfo"]["hasNextPage"]:
                 continue
 
-            has_page, comment_cursor = (
+            has_page, items_cursor = (
                 True,
-                original_node["comments"]["pageInfo"]["endCursor"],
+                original_node["timelineItems"]["pageInfo"]["endCursor"],
             )
             while has_page:
                 try:
                     variables = {
                         "id": original_node["id"],
-                        "perPage": self.per_page,
-                        "commentCursor": comment_cursor,
+                        "itemsPerPage": self.per_page,
+                        "itemsCursor": items_cursor,
                     }
                     data, err = self._post(
-                        json={"query": self._NODE_COMMENT_QUERY, "variables": variables}
+                        self._QUERIES.node(),
+                        variables
                     )
                     if err:
                         break
                     else:
-                        comments = data["data"]["node"]["comments"]
+                        comments = data["node"]["timelineItems"]
                         if comments["nodes"]:
-                            comment_cursor = comments["pageInfo"]["endCursor"]
+                            items_cursor = comments["pageInfo"]["endCursor"]
                             has_page = comments["pageInfo"]["hasNextPage"]
                         else:
-                            comment_cursor, has_page = None, False
+                            items_cursor, has_page = None, False
 
                         logger.info(
-                            f"Fetched page for additional comments. total_requests_made={self._total_pages_fetched}, issue_comment_count={comments['totalCount']}, comment_cusor={comment_cursor}"
+                            f"Fetched page for additional items. total_requests_made={self._total_pages_fetched}, timelineItems_count={comments['totalCount']}, timelineItems_cursor={items_cursor}"
                         )
 
-                        # Merge these comments to the original data
-                        original_node["comments"]["nodes"].extend(comments["nodes"])
+                        # Merge these items to the original data
+                        original_node["timelineItems"]["nodes"].extend(comments["nodes"])
 
                 except (SystemExit, KeyboardInterrupt):
                     logger.warning("Interrupted, will convert retrieved data and exit")
                     break
 
     def fetch_and_decode_repository(
-        self,
-        repo_name: str,
-        include_issues: bool,
-        include_prs: bool,
-        include_closed_issues: bool,
-        include_closed_prs: bool,
+            self,
+            repo_name: str,
+            include_issues: bool,
+            include_prs: bool,
+            include_closed_issues: bool,
+            include_closed_prs: bool,
     ) -> GithubRepo:
         """
         Entry point for fetching a repo.
@@ -435,7 +266,7 @@ class GithubAPI:
         )
 
         try:
-            repo_data = response["data"]["repository"]
+            repo_data = response["repository"]
         except KeyError:
             logger.error("Repository data missing in response, can't proceed")
             raise
@@ -467,16 +298,19 @@ class GithubAPI:
         )
 
     def _parse_issue_or_pull_request(
-        self, issue_or_pr: Dict[str, Any], is_pull_request: bool
+            self, issue_or_pr: Dict[str, Any], is_pull_request: bool
     ) -> GithubIssue:
         i = issue_or_pr
-        comments = []
-        for c in i["comments"]["nodes"]:
+        timeline_items = []
+        for c in i["timelineItems"]["nodes"]:
             try:
-                comments.append(
+                timeline_items.append(
+                    # TODO: Replace this and get the right class from the __typename
                     GithubComment(
                         created_at=dateutil_parse(c["createdAt"]),
-                        body=c["body"],
+                        body=c["body"]
+                        if c.get("body")
+                        else "",
                         user_login=c["author"]["login"]
                         if c.get("author")
                         else "(unknown)",
@@ -503,5 +337,5 @@ class GithubAPI:
             created_at=dateutil_parse(i["createdAt"]),
             url=i["url"],
             label_names=[node["name"] for node in i["labels"]["nodes"]],
-            comments=comments,
+            comments=timeline_items,
         )
