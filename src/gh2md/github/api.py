@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from gh2md.github.queries import Queries
 from gh2md.github.repo import GithubRepo
 from gh2md.logger import get_logger
 
-logger = None
+logger: logging.Logger
 
 
 @dataclass
