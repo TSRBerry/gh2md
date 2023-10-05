@@ -8,12 +8,14 @@ from typing import List
 import mock
 import pytest
 
+import gh2md.github.api
+import gh2md.github.issue
 from gh2md import gh2md
 
 
 @pytest.fixture(scope="session")
 def gh():
-    return gh2md.GithubAPI(gh2md.get_environment_token())
+    return gh2md.github.api.GithubAPI(gh2md.get_environment_token())
 
 
 def test_fetch_and_decode_repository(gh):
@@ -30,7 +32,7 @@ def test_fetch_and_decode_repository(gh):
 
 
 def test_processing_for_single_issue_produces_result():
-    issue = gh2md.GithubIssue(
+    issue = gh2md.github.issue.GithubIssue(
         pull_request=False,
         created_at=datetime.datetime.now(),
         number=5,
